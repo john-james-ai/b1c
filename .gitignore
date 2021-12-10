@@ -8,6 +8,18 @@ __pycache__/
 # Data files
 *.csv
 
+# Config directory
+config/
+
+# Lab
+xrec/lab/
+
+# Wheel files.
+*.whl
+
+# Operations and Management Files
+operations/
+
 # Distribution / packaging
 .Python
 env/
