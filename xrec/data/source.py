@@ -12,7 +12,7 @@
 # URL      : https://github.com/john-james-ai/xrec                                                                         #
 # ------------------------------------------------------------------------------------------------------------------------ #
 # Created  : Thursday, December 9th 2021, 5:27:54 pm                                                                       #
-# Modified : Saturday, December 11th 2021, 1:13:15 pm                                                                      #
+# Modified : Saturday, December 11th 2021, 3:44:16 pm                                                                      #
 # Modifier : John James (john.james.ai.studio@gmail.com)                                                                   #
 # ------------------------------------------------------------------------------------------------------------------------ #
 # License  : BSD 3-clause "New" or "Revised" License                                                                       #
@@ -32,18 +32,44 @@ from xrec.utils.config import Config
 
 
 class AmazonSource:
-    """Extracts Amazon review and product data."""
+    """Manages the metadata for the Amazon reviews data sets.
+
+    This class serves two purposes:
+        1. Manage the metadata for the Amazon reviews data source
+        2. Serve tasks to download the source data to workers operating in a multiprocessing environment.
+
+    The interface includes:
+        create_metadata: Extracts file metadata from the source site
+        read_metadata: Returns metadata dataframe.
+        update_metadata: Method called by the download callback. Updates metadata with download state and statistics.
+        delete_metadata: Purges metadata
+        get_keys = Returns a list of metadata keys
+        describe: Describes a file
+        get_extract_tasks: Serves data extraction tasks. Method called by the extract process.
+
+    Attributes:
+        metadata: DataFrame containing all metadata.
+
+    Dependencies:
+        Config: Class responsible for managing configuration information. Used to obtain the URL for the Amazon reviews data source.
+
+    """
 
     def __init__(self) -> None:
+        """Initializes the class with filepaths for metadata and data. """
         self.metadata = None
-        self.config = Config()
-        self.filepath_metadata = self.config.read(
+        self._config = Config()
+        self._filepath_metadata = self._config.read(
             'DATA', 'amazon_metadata_uri')
-        self.filepath_data = self.config.read(
+        self._filepath_data = self._config.read(
             'DATA', 'data_external_amazon')
 
     def create_metadata(self, url: str):
-        """Extracts metadata, such as Amazon categories and associated links from the source website."""
+        """Extracts and saves the metadata for the Amazon reviews and products data sets.
+
+        Args:
+            url: The URL for the Amazon reviews data source
+        """
         page = requests.get(url)
         soup = BeautifulSoup(page.content, 'html.parser')
         self.metadata = self._parse_table(soup)
@@ -81,6 +107,7 @@ class AmazonSource:
         Args:
             key: Key designating the product category
             kind: Either 'r' for reviews or 'p' for products.
+            downloaded: True if file was downloaded. False otherwise.
             download_date: The datetime of the download.
             download_duration: The duration of the download in seconds.
             download_size: The number of bytes downloaded.
@@ -103,21 +130,62 @@ class AmazonSource:
             "Are you sure you wish to delete the Amazon metadata? [y/n]")
         if 'y' in confirm:
             self.metadata = None
-            os.remove(self.filepath_metadata)
+            os.remove(self._filepath_metadata)
 
     def get_keys(self) -> list:
         """Returns a list of unique keys for the datasets."""
         self._check_metadata()
         return self.metadata['key'].unique()
 
-    def get_extract_tasks(self, keys: list = []) -> list:
-        """Returns a list of dictionaries containing key, url and filepath information.
+    def describe(self, key: str, kind: str) -> str:
+        """Describes the dataset for the specified key and kind.
 
-        Note, it only returns extract tasks for files that have not yet been downloaded.
+        Args:
+            key: The key for the dataset category
+            kind: r for reviews or p for products
+        Returns:
+            string describing the file and its state.
+
+        """
+        self._check_metadata()
+        kind = self._get_kind(kind)
+        data = self.metadata[(self.metadata['key'] == key)
+                             & (self.metadata['kind'] == kind)].to_dict(orient='records')[0]
+
+        downloaded = ""
+        if data['downloaded']:
+            downloaded = " Downloaded on {} at {}".format(
+                data['download_date'].date(),
+                data['download_date'].time())
+        description = data['category'] + " containing " + \
+            str(data['n']) + ' ' + data['kind'] + ' in ' + \
+            str(round(data['size'] / 1048576, 2)) + " Mb" + downloaded + '.'
+        return description
+
+    def reset_extract(self) -> None:
+        """Resets extract metadata for all data sets."""
+        self._check_metadata()
+        if self.metadata is not None:
+            self.metadata['downloaded'] = False
+            self.metadata['download_date'] = np.datetime64(
+                datetime.fromisoformat('1970-01-01'))
+            self.metadata['download_duration'] = 0
+            self.metadata['download_size'] = 0
+            self._save()
+            self._load()
+
+    def get_extract_tasks(self, keys: list = [], max_tasks=100) -> list:
+        """Returns a list of dictionaries containing metadata for files to be extracted.
+
+        This method returns a list of dictionaries of max length = max_tasks. Each dictionary contains a key, kind (review or product), url and filepath. Each dictionary entry or task is assigned to a download worker for downloading. Only files that have not yet been downloaded are returned. If there are no remaining files to be downloaded, an empty list is returned.
 
         Args:
             keys: Optional list of keys for the files to be extracted. Default is None
                 which would return data for files not yet downloaded.
+            max_tasks: Maximum number of tasks to return.
+
+        Returns:
+            list of dictionaries containing data set metadata.
 
         """
         self._check_metadata()
@@ -126,15 +194,7 @@ class AmazonSource:
                 keys)) & (~self.metadata['downloaded'])]
         else:
             tasks = self.metadata[~self.metadata['downloaded']]
-        return tasks[['key', 'kind', 'url', 'filepath']].to_dict('records')
-
-    def _check_metadata(self) -> None:
-        """Checks if metadata has been extracted, and if not extracts it."""
-        if self.metadata is None:
-            if os.path.isfile(self.filepath_metadata):
-                self._load()
-            else:
-                self.create_metadata()
+        return tasks[['key', 'kind', 'url', 'filepath']].head(max_tasks).to_dict('records')
 
     def _parse_table(self, soup) -> pd.DataFrame:
         """Parses HTML table and returns metadata as list of dictionaries.
@@ -171,7 +231,7 @@ class AmazonSource:
         # Format review links and metadata
         reviews_url = links[0].get('href')
         reviews_filepath = os.path.join(
-            self.filepath_data, 'reviews' + '/', key + '.json.gz')
+            self._filepath_data, 'reviews' + '/', key + '.json.gz')
         reviews_num = int(tds[1].text.split()[1].replace(
             ',', '').replace('(', '').replace(')', ''))
         reviews_size = requests.get(
@@ -186,7 +246,7 @@ class AmazonSource:
         # And for products
         products_url = links[1].get('href')
         products_filepath = os.path.join(
-            self.filepath_data, 'products' + '/', key + '.json.gz')
+            self._filepath_data, 'products' + '/', key + '.json.gz')
         products_num = int(tds[2].text.split()[1].replace(
             ',', '').replace('(', '').replace(')', ''))
         products_size = requests.get(
@@ -238,13 +298,30 @@ class AmazonSource:
         s = s.strip().split()[0].lower()
         return s
 
+    def _check_metadata(self) -> None:
+        """Checks if metadata has been extracted, and if not extracts it."""
+        if os.path.isfile(self._filepath_metadata):
+            self._load()
+        else:
+            self.create_metadata()
+
     def _load(self) -> None:
-        self.metadata = pd.read_csv(
-            self.filepath_metadata, index_col=False, parse_dates=['modified', 'download_date'])
+        if os.path.isfile(self._filepath_metadata):
+            self.metadata = pd.read_csv(
+                self._filepath_metadata, index_col=False, parse_dates=['modified', 'download_date'])
 
     def _save(self) -> None:
-        self.metadata.to_csv(self.filepath_metadata, header=True, index=False)
+        self.metadata.to_csv(self._filepath_metadata, header=True, index=False)
 
     def _get_kind(self, kind) -> str:
         """Converts kind parameter to a word because I'm that anal."""
         return 'products' if 'p' in kind else 'reviews'
+
+    @property
+    def n_files(self) -> int:
+        return len(self.metadata.index)
+
+    @property
+    def n_files_downloaded(self) -> int:
+        self._check_metadata()
+        return (self.metadata['downloaded']).sum()

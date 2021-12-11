@@ -12,7 +12,7 @@
 # URL      : https://github.com/john-james-ai/xrec                                                                         #
 # ------------------------------------------------------------------------------------------------------------------------ #
 # Created  : Friday, December 10th 2021, 1:10:55 am                                                                        #
-# Modified : Saturday, December 11th 2021, 12:22:23 pm                                                                     #
+# Modified : Saturday, December 11th 2021, 1:21:20 pm                                                                      #
 # Modifier : John James (john.james.ai.studio@gmail.com)                                                                   #
 # ------------------------------------------------------------------------------------------------------------------------ #
 # License  : BSD 3-clause "New" or "Revised" License                                                                       #
@@ -64,3 +64,11 @@ def download_callback(task: dict) -> None:
                              download_date=task['download_date'],
                              download_duration=task['download_duration'],
                              download_size=task['download_size'])
+
+
+def extract(url) -> None:
+    """ Extracts Amazon reviews data using multiprocessing.
+
+    Args:
+        url: URL for Amazon reviews and product data.
+    """

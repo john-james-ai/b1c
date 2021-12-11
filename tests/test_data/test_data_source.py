@@ -12,7 +12,7 @@
 # URL      : https://github.com/john-james-ai/xrec                                                                         #
 # ------------------------------------------------------------------------------------------------------------------------ #
 # Created  : Thursday, December 9th 2021, 9:38:37 pm                                                                       #
-# Modified : Saturday, December 11th 2021, 1:14:44 pm                                                                      #
+# Modified : Saturday, December 11th 2021, 3:45:01 pm                                                                      #
 # Modifier : John James (john.james.ai.studio@gmail.com)                                                                   #
 # ------------------------------------------------------------------------------------------------------------------------ #
 # License  : BSD 3-clause "New" or "Revised" License                                                                       #
@@ -21,6 +21,7 @@
 # %%
 import os
 import pytest
+import time
 import logging
 import inspect
 import pandas as pd
@@ -28,6 +29,7 @@ import numpy as np
 from datetime import datetime
 from xrec.data.source import AmazonSource
 from xrec.utils.config import Config
+from xrec.data.extract import download_callback
 # ------------------------------------------------------------------------------------------------------------------------ #
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -37,6 +39,8 @@ class AmazonSourceTests:
 
     def test_setup(self):
         logger.info("Started {}".format(self.__class__.__name__))
+        amazon = AmazonSource()
+        amazon.reset_extract()
 
     def test_create_metadata(self):
         logger.info("    Started {} {}".format(
@@ -51,6 +55,10 @@ class AmazonSourceTests:
         assert amazon.metadata.shape[0] == 58, \
             logger.error("     Failure in {}.".format(inspect.stack()[0][3]))
         assert amazon.metadata.shape[1] == 12, \
+            logger.error("     Failure in {}.".format(inspect.stack()[0][3]))
+        assert amazon.n_files == 58, \
+            logger.error("     Failure in {}.".format(inspect.stack()[0][3]))
+        assert amazon.n_files_downloaded == 0, \
             logger.error("     Failure in {}.".format(inspect.stack()[0][3]))
 
         logger.info("    Successfully completed {} {}".format(
@@ -99,8 +107,6 @@ class AmazonSourceTests:
         logger.info("    Started {} {}".format(
             self.__class__.__name__, inspect.stack()[0][3]))
 
-        c = Config()
-        url = c.read('DATA', 'url')
         amazon = AmazonSource()
         key = 'video'
         kind = 'r'
@@ -124,22 +130,32 @@ class AmazonSourceTests:
         logger.info("    Successfully completed {} {}".format(
             self.__class__.__name__, inspect.stack()[0][3]))
 
-    def test_get_extract_tasks(self):
-        self._test_get_extract_tasks_sans_video_reviews()
-        self._test_get_extract_tasks_none()
-
-    def _test_get_extract_tasks_sans_video_reviews(self):
+    def test_reset_extract(self):
         logger.info("    Started {} {}".format(
             self.__class__.__name__, inspect.stack()[0][3]))
 
-        c = Config()
-        url = c.read('DATA', 'url')
+        amazon = AmazonSource()
+        amazon.reset_extract()
+        assert amazon.n_files_downloaded == 0,\
+            logger.error("     Failure in {}.".format(inspect.stack()[0][3]))
+
+        logger.info("    Successfully completed {} {}".format(
+            self.__class__.__name__, inspect.stack()[0][3]))
+
+    def test_get_extract(self):
+        self._test_get_extract_tasks_all()
+        self._test_get_extract_tasks_max_tasks()
+
+    def _test_get_extract_tasks_all(self):
+        logger.info("    Started {} {}".format(
+            self.__class__.__name__, inspect.stack()[0][3]))
+
         amazon = AmazonSource()
         tasks = amazon.get_extract_tasks()
 
         assert isinstance(tasks, list), \
             logger.error("     Failure in {}.".format(inspect.stack()[0][3]))
-        assert len(tasks) == 57, \
+        assert len(tasks) == 58, \
             logger.error("     Failure in {}. Expected length=56, actual={}".format(
                 inspect.stack()[0][3], len(tasks)))
         for task in tasks:
@@ -156,33 +172,63 @@ class AmazonSourceTests:
         logger.info("    Successfully completed {} {}".format(
             self.__class__.__name__, inspect.stack()[0][3]))
 
-    def _test_get_extract_tasks_none(self):
+    def _test_get_extract_tasks_max_tasks(self):
         logger.info("    Started {} {}".format(
             self.__class__.__name__, inspect.stack()[0][3]))
 
-        self._simulate_download()
-
+        max_tasks = 2
         amazon = AmazonSource()
-        tasks = amazon.get_extract_tasks()
+        tasks = amazon.get_extract_tasks(max_tasks=max_tasks)
 
-        assert len(tasks) == 0, \
+        assert len(tasks) == 2,\
+            logger.error("     Failure in {}.".format(inspect.stack()[0][3]))
+        assert tasks[0].get('kind') == 'reviews', \
+            logger.error("     Failure in {}.".format(inspect.stack()[0][3]))
+        assert tasks[1].get('kind') == 'products', \
             logger.error("     Failure in {}.".format(inspect.stack()[0][3]))
 
         logger.info("    Successfully completed {} {}".format(
             self.__class__.__name__, inspect.stack()[0][3]))
 
-    def _simulate_download(self):
+    def test_extract(self):
+        logger.info("    Started {} {}".format(
+            self.__class__.__name__, inspect.stack()[0][3]))
+
+        max_tasks = 2
         amazon = AmazonSource()
-        keys = amazon.get_keys()
-        kinds = ['r', 'p']
-        download_date = np.datetime64(datetime.now())
-        download_duration = 2398
-        download_size = 126543
-        downloaded = True
-        for key in keys:
-            for kind in kinds:
-                amazon.update_metadata(
-                    key, kind, downloaded, download_date, download_duration, download_size)
+        amazon.reset_extract()
+
+        assert amazon.n_files == 58, \
+            logger.error("     Failure in {}.".format(inspect.stack()[0][3]))
+        assert amazon.n_files_downloaded == 0, \
+            logger.error("     Failure in {}.".format(inspect.stack()[0][3]))
+
+        n_downloads = 0
+        tasks = amazon.get_extract_tasks(max_tasks=max_tasks)
+        while len(tasks) > 0:
+            for task in tasks:
+                result = self._simulate_download(task)
+                download_callback(result)
+                n_downloads += 1
+                print(amazon.describe(task['key'], task['kind']))
+            assert amazon.n_files_downloaded == n_downloads, \
+                logger.error("     Failure in {}.".format(
+                    inspect.stack()[0][3]))
+
+            tasks = amazon.get_extract_tasks(max_tasks=max_tasks)
+
+        logger.info("    Successfully completed {} {}".format(
+            self.__class__.__name__, inspect.stack()[0][3]))
+
+    def _simulate_download(self, task):
+        start = datetime.now()
+        end = datetime.now()
+        duration = end - start
+        task['downloaded'] = True
+        task['download_date'] = np.datetime64(end)
+        task['download_duration'] = duration
+        task['download_size'] = np.random.randint(1000000, 99999999)
+        return task
 
     def test_delete_metadata(self):
         logger.info("    Started {} {}".format(
@@ -193,7 +239,7 @@ class AmazonSourceTests:
         amazon = AmazonSource()
         amazon.delete_metadata()
 
-        assert amazon.metadata is None,\
+        assert amazon.metadata is None, \
             logger.error("     Failure in {}.".format(inspect.stack()[0][3]))
 
         logger.info("    Successfully completed {} {}".format(
@@ -210,7 +256,9 @@ if __name__ == "__main__":
     t.test_create_metadata()
     t.test_read_metadata()
     t.test_update_metadata()
-    t.test_get_extract_tasks()
+    t.test_reset_extract()
+    t.test_get_extract()
+    t.test_extract()
     t.test_delete_metadata()
     t.test_teardown()
 
