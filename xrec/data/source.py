@@ -12,7 +12,7 @@
 # URL      : https://github.com/john-james-ai/xrec                                                                         #
 # ------------------------------------------------------------------------------------------------------------------------ #
 # Created  : Thursday, December 9th 2021, 5:27:54 pm                                                                       #
-# Modified : Friday, December 10th 2021, 3:26:27 pm                                                                        #
+# Modified : Saturday, December 11th 2021, 1:13:15 pm                                                                      #
 # Modifier : John James (john.james.ai.studio@gmail.com)                                                                   #
 # ------------------------------------------------------------------------------------------------------------------------ #
 # License  : BSD 3-clause "New" or "Revised" License                                                                       #
@@ -34,8 +34,7 @@ from xrec.utils.config import Config
 class AmazonSource:
     """Extracts Amazon review and product data."""
 
-    def __init__(self, url: str) -> None:
-        self.url = url
+    def __init__(self) -> None:
         self.metadata = None
         self.config = Config()
         self.filepath_metadata = self.config.read(
@@ -43,9 +42,9 @@ class AmazonSource:
         self.filepath_data = self.config.read(
             'DATA', 'data_external_amazon')
 
-    def create_metadata(self):
+    def create_metadata(self, url: str):
         """Extracts metadata, such as Amazon categories and associated links from the source website."""
-        page = requests.get(self.url)
+        page = requests.get(url)
         soup = BeautifulSoup(page.content, 'html.parser')
         self.metadata = self._parse_table(soup)
         self._save()
@@ -75,7 +74,8 @@ class AmazonSource:
             df = self.metadata
         return df
 
-    def update_metadata(self, key: str, kind: str, download_date: datetime, download_duration: int, download_size: int) -> None:
+    def update_metadata(self, key: str, kind: str, downloaded: bool,
+                        download_date: datetime, download_duration: int, download_size: int) -> None:
         """Updates the download metadata for an Amazon review or product file.
 
         Args:
@@ -90,23 +90,43 @@ class AmazonSource:
         kind = self._get_kind(kind)
         cond = ((self.metadata['key'] == key) &
                 (self.metadata['kind'] == kind))
+        self.metadata.loc[cond, 'downloaded'] = downloaded
         self.metadata.loc[cond, 'download_date'] = download_date
         self.metadata.loc[cond, 'download_duration'] = download_duration
         self.metadata.loc[cond, 'download_size'] = download_size
         self._save()
+        self._load()
 
-    def delete_metadata(self, purge_history=True) -> None:
+    def delete_metadata(self) -> None:
+        """Deletes metadata."""
         confirm = input(
             "Are you sure you wish to delete the Amazon metadata? [y/n]")
         if 'y' in confirm:
             self.metadata = None
-            if purge_history:
-                os.remove(self.filepath_metadata)
+            os.remove(self.filepath_metadata)
 
-    def get_extract_tasks(self) -> list:
-        """Returns a list of dictionaries containing key, url and filepath information."""
+    def get_keys(self) -> list:
+        """Returns a list of unique keys for the datasets."""
         self._check_metadata()
-        return self.metadata[['key', 'kind', 'url', 'filepath']].to_dict('records')
+        return self.metadata['key'].unique()
+
+    def get_extract_tasks(self, keys: list = []) -> list:
+        """Returns a list of dictionaries containing key, url and filepath information.
+
+        Note, it only returns extract tasks for files that have not yet been downloaded.
+
+        Args:
+            keys: Optional list of keys for the files to be extracted. Default is None
+                which would return data for files not yet downloaded.
+
+        """
+        self._check_metadata()
+        if len(keys) > 0:
+            tasks = self.metadata[(self.metadata['key'].isin(
+                keys)) & (~self.metadata['downloaded'])]
+        else:
+            tasks = self.metadata[~self.metadata['downloaded']]
+        return tasks[['key', 'kind', 'url', 'filepath']].to_dict('records')
 
     def _check_metadata(self) -> None:
         """Checks if metadata has been extracted, and if not extracts it."""
@@ -184,6 +204,7 @@ class AmazonSource:
                    'n': reviews_num,
                    'size': reviews_size,
                    'modified': reviews_modified,
+                   'downloaded': False,
                    'download_date': reviews_download_date,
                    'download_duration': reviews_download_duration,
                    'download_size': reviews_download_size,
@@ -196,6 +217,7 @@ class AmazonSource:
                     'n': products_num,
                     'size': products_size,
                     'modified': products_modified,
+                    'downloaded': False,
                     'download_date': products_download_date,
                     'download_duration': products_download_duration,
                     'download_size': products_download_size,
